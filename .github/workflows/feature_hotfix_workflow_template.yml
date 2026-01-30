@@ -2,13 +2,16 @@ name: Feature/Hotfix CICD Template workflow
 
 on:
   workflow_call:
+    secrets:
+      GH_SHARED_REPO_PAT:
+        required: true
 
 jobs:
   feature_hotfix_workflow_template:
     runs-on: self-hosted
-    environment: DEV
+    environment: Prod
     env:
-      ENV_NAME: DEV
+      ENV_NAME: Prod
     steps:
       - name: Checkout Current Repository
         uses: actions/checkout@v4
