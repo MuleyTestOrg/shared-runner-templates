@@ -1,0 +1,80 @@
+name: Feature/Hotfix CICD Template workflow
+
+on:
+  workflow_call:
+
+jobs:
+  feature_hotfix_workflow_template:
+    runs-on: self-hosted
+    environment: DEV
+    env:
+      ENV_NAME: DEV
+    steps:
+      - name: Checkout Current Repository
+        uses: actions/checkout@v4
+
+      # 2. Checkout the shared-repo to get settings.xml
+      - name: Checkout Shared-Runner-Templates Repository
+        uses: actions/checkout@v4
+        with:
+          repository: narendar-gaddam_sfemu/shared-runner-templates
+          path:  shared # Download shared-repo into this folder
+          token: ${{ secrets.GH_SHARED_REPO_PAT }} # Required if shared-repo is private
+          sparse-checkout: |
+            mulesoft/maven
+          sparse-checkout-cone-mode: false
+
+      - name: Get AWS Role ARN for environment
+        id: aws_role_arn
+        run: |
+          AWS_ROLE_ARN=$(echo '${{ vars.AWS_ROLE_ARN_MAP }}' | jq -r 'to_entries | map(select(.key | endswith("'"$ENV_NAME"'"))) | .[].value')
+          echo "AWS_ROLE_ARN=$AWS_ROLE_ARN" >> $GITHUB_OUTPUT
+                    
+      - name: Configure AWS credentials for Secrets Manager
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.aws_role_arn.outputs.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+        if: ${{ steps.aws_role_arn.outputs.AWS_ROLE_ARN != '' }}
+
+      - name: Fetch secrets from AWS Secrets Manager
+        id: aws_secrets
+        shell: bash
+        run: |
+          COMMON_SECRETS_NAME="${{ vars.AWS_ANYPOINT_SECRETS_PREFIX }}secrets" 
+          SECRETS_TO_FETCH=("$COMMON_SECRETS_NAME")
+
+          for SECRET_ID in "${SECRETS_TO_FETCH[@]}"; do
+            # ... (standard retrieval code from previous step) ...
+
+            # 2. VALIDATION: Stop if the ID is invalid before calling AWS
+            if [[ -z "$SECRET_ID" || "$SECRET_ID" == "null" ]]; then
+              echo "::error::Validation Failed! No valid Secret ID found for environment: $SECRET_ID"
+              echo "Check if your  contains a key ending with '$SECRET_ID'."
+              exit 1
+            fi
+
+            echo "Attempting to retrieve secret for ID: $SECRET_ID"
+            SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ID" --query SecretString --output text)
+
+            for key in $(echo "$SECRET_JSON" | jq -r 'keys[] | @base64'); do
+              _decoded_key=$(echo "${key}" | base64 --decode)
+              _value=$(echo "$SECRET_JSON" | jq -r --arg k "$_decoded_key" '.[$k]')
+              
+              # 1. Export to GITHUB_ENV (Access within the same job via $VAR)
+              # echo "$_decoded_key=$_value" >> "$GITHUB_ENV"
+
+              # 2. Export to GITHUB_OUTPUT (Access via steps context)
+              echo "$_decoded_key=$_value" >> "$GITHUB_OUTPUT"
+            done
+          done
+
+          # echo "--- DEBUG: GITHUB_ENV CONTENT START ---"
+          # cat "$GITHUB_ENV"
+          # echo "--- DEBUG: GITHUB_ENV CONTENT END ---"
+
+      - name: BuildPackage
+        run: mvn -B -U clean package -DskipASTValidation -DskipTests -s shared/mulesoft/maven/settings.xml 
+        env:          
+          CONNECTED_APP_ID: ${{ steps.aws_secrets.outputs.CONNECTED_APP_ID }}
+          CONNECTED_APP_SECRET: ${{ steps.aws_secrets.outputs.CONNECTED_APP_SECRET }}
