@@ -7,7 +7,7 @@ jobs:
   dev_it_workflow_template:
     runs-on: self-hosted
     environment:
-      ${{ endsWith(github.event.pull_request.base.ref, '/dev') && 'Dev' || endsWith(github.event.pull_request.base.ref, '/it') && 'IT' || 'unknown' }}
+      ${{ endsWith(github.event.pull_request.base.ref, '/dev') && 'Prod' || endsWith(github.event.pull_request.base.ref, '/it') && 'IT' || 'unknown' }}
     permissions:
       id-token: write
       contents: read
