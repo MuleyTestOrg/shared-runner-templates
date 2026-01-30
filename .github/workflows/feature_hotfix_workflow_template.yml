@@ -20,7 +20,7 @@ jobs:
       - name: Checkout Shared-Runner-Templates Repository
         uses: actions/checkout@v4
         with:
-          repository: MuleyTestOrg/actions-demo/shared-runner-templates
+          repository: MuleyTestOrg/shared-runner-templates
           path:  shared # Download shared-repo into this folder
           token: ${{ secrets.GH_SHARED_REPO_PAT }} # Required if shared-repo is private
           sparse-checkout: |
