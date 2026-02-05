@@ -2,16 +2,13 @@ name: Feature/Hotfix CICD Template workflow
 
 on:
   workflow_call:
-    secrets:
-      GH_SHARED_REPO_PAT:
-        required: true
 
 jobs:
   feature_hotfix_workflow_template:
     runs-on: self-hosted
-    environment: Prod
+    environment: DEV
     env:
-      ENV_NAME: Prod
+      ENV_NAME: DEV
     steps:
       - name: Checkout Current Repository
         uses: actions/checkout@v4
@@ -20,7 +17,7 @@ jobs:
       - name: Checkout Shared-Runner-Templates Repository
         uses: actions/checkout@v4
         with:
-          repository: MuleyTestOrg/shared-runner-templates
+          repository: narendar-gaddam_sfemu/shared-runner-templates
           path:  shared # Download shared-repo into this folder
           token: ${{ secrets.GH_SHARED_REPO_PAT }} # Required if shared-repo is private
           sparse-checkout: |
@@ -29,6 +26,8 @@ jobs:
 
       - name: Get AWS Role ARN for environment
         id: aws_role_arn
+        env:
+          ENV_NAME: ${{ env.ENV_NAME }}
         run: |
           AWS_ROLE_ARN=$(echo '${{ vars.AWS_ROLE_ARN_MAP }}' | jq -r 'to_entries | map(select(.key | endswith("'"$ENV_NAME"'"))) | .[].value')
           echo "AWS_ROLE_ARN=$AWS_ROLE_ARN" >> $GITHUB_OUTPUT

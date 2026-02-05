@@ -4,15 +4,15 @@ on:
   workflow_call:
 
 jobs:
-  stage_workflow_template:
+  stage_prod_workflow_template:
     # Use this YAML in your workflow file for each job
     runs-on: self-hosted
-    environment: 
-      ${{ endsWith(github.event.pull_request.base.ref, '/stage') && 'PROD' || 'unknown' }}
+    # environment: 
+    #   ${{ endsWith(github.event.pull_request.base.ref, '/stage') && 'PROD' || 'unknown' }}
 
-      # This expression is evaluated at the job level and the result is stored in the shell variable $ENV_NAME
-    env:  
-      ENV_NAME: ${{ endsWith(github.event.pull_request.base.ref, '/stage') && 'PROD' || 'unknown' }}
+    #   # This expression is evaluated at the job level and the result is stored in the shell variable $ENV_NAME
+    # env:  
+    #   ENV_NAME: ${{ endsWith(github.event.pull_request.base.ref, '/stage') && 'PROD' || 'unknown' }}
 
     # This condition ensures the job only runs if:
     # 1. The PR was merged

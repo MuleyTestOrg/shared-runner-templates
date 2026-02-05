@@ -8,15 +8,9 @@ jobs:
     runs-on: self-hosted
     environment:
       ${{ endsWith(github.event.pull_request.base.ref, '/preprod') && 'PreProd' || 'unknown' }}
-    # permissions:
-    #   id-token: write
-    #   contents: read
-    # This condition ensures the job only runs if:
-    # 1. The PR was merged
-    # 2. The PR's target branch is 'release/R8/preprod'
-    env:
+#    env:
       # This expression is evaluated at the job level and the result is stored in the shell variable $ENV_NAME
-      ENV_NAME: ${{ endsWith(github.event.pull_request.base.ref, '/preprod') && 'UAT' || 'unknown' }}
+#      ENV_NAME: ${{ endsWith(github.event.pull_request.base.ref, '/preprod') && 'UAT' || 'unknown' }}
 
     if: | 
       github.event.pull_request.merged == true && startsWith(github.event.pull_request.base.ref, 'release/') && endsWith(github.event.pull_request.base.ref, '/preprod')
@@ -51,9 +45,11 @@ jobs:
       - name: Get AWS Role ARN for environment
         id: aws_role_arn
         run: |
-          AWS_ROLE_ARN=$(echo '${{ vars.AWS_ROLE_ARN_MAP }}' | jq -r 'to_entries | map(select(.key | endswith("'"$ENV_NAME"'"))) | .[].value')
+          AWS_ROLE_ARN="$(echo '${{ vars.AWS_ROLE_ARN_MAP }}' | jq -r --arg env "$ENV_NAME" '.[$env]')"
+          AWS_ANYPOINT_SECRETS_PREFIX="$(echo '${{ vars.AWS_ANYPOINT_SECRETS_PREFIX_MAP }}' | jq -r --arg env "$ENV_NAME" '.[$env]')"
           echo "AWS_ROLE_ARN=$AWS_ROLE_ARN" >> "$GITHUB_OUTPUT"
-
+          echo "AWS_ANYPOINT_SECRETS_PREFIX=$AWS_ANYPOINT_SECRETS_PREFIX" >> "$GITHUB_OUTPUT"
+    
       - name: Configure AWS credentials for Secrets Manager
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -65,8 +61,8 @@ jobs:
         id: aws_secrets
         shell: bash
         run: |
-          COMMON_SECRETS_NAME="${{ vars.AWS_ANYPOINT_SECRETS_PREFIX }}secrets" 
-          BG_SECRETS_NAME="${{ vars.AWS_ANYPOINT_SECRETS_PREFIX }}${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }}/secrets" 
+          COMMON_SECRETS_NAME="${{ steps.aws_role_arn.outputs.AWS_ANYPOINT_SECRETS_PREFIX }}secrets" 
+          BG_SECRETS_NAME="${{ steps.aws_role_arn.outputs.AWS_ANYPOINT_SECRETS_PREFIX }}${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }}/secrets" 
           SPLUNK_SECRETS_NAME="${{ vars.AWS_SPLUNK_SECRETS_NAME }}"
 
           SECRETS_TO_FETCH=("$COMMON_SECRETS_NAME" "$BG_SECRETS_NAME" "$SPLUNK_SECRETS_NAME")
@@ -114,7 +110,7 @@ jobs:
 
         run: | 
           echo "GitHub Pull Request Ref (github.ref): ${{ github.event.pull_request.base.ref }}"
-          echo "Environment Name:  $ENV_NAME"
+          echo "Environment Name:  ${{ steps.aws_secrets.outputs.ANYPOINT_ENV }}"
           echo "REPLICA_SIZE INPUT VARIABLE: ${{ vars.REPLICA_SIZE }}"
           echo "Replica SIZE is ${{ steps.default.outputs.REPLICA_SIZE }}"
           echo "REPLICA_COUNT: ${{ steps.default.outputs.REPLICA_COUNT }}"
@@ -219,8 +215,7 @@ jobs:
         env:          
           CONNECTED_APP_ID: ${{ steps.aws_secrets.outputs.CONNECTED_APP_ID }}
           CONNECTED_APP_SECRET: ${{ steps.aws_secrets.outputs.CONNECTED_APP_SECRET }}
-          ANYPOINT_ENV: Sandbox 
-            #${{ steps.aws_secrets.outputs.ANYPOINT_ENV }}
+          ANYPOINT_ENV: ${{ steps.aws_secrets.outputs.ANYPOINT_ENV }}
         if: ${{ success() }}
 
       - name: Deploy or Update Mule Application
@@ -231,7 +226,7 @@ jobs:
           #APP_ID=$(anypoint-cli-v4 runtime-mgr:application:list --output json | jq -r 'map(select(.name == "$APP_NAME"))[].id')
           RELEASE_VERSION=${{ steps.extract_tag.outputs.RELEASE_TAG }}
           RELEASE_VERSION=${RELEASE_VERSION#*-}
-          ENV_NAME=$(echo "${{ env.ENV_NAME }}" | tr '[:upper:]' '[:lower:]')
+          ENV_NAME=$(echo "${{ steps.aws_secrets.outputs.ANYPOINT_ENV }}" | tr '[:upper:]' '[:lower:]')
           #echo "$ENV_NAME-$APP_NAME"
 
           echo "APP_ID: $APP_ID and RELEASE_VERSION: $RELEASE_VERSION"
@@ -241,50 +236,66 @@ jobs:
             echo "APP_ID: $APP_ID"
             echo "Application '$APP_NAME' already exists. Redeploying it..."  
             #ECHO MODIFY/REDEPLOY COMMAND
-            echo " anypoint-cli-v4 runtime-mgr:application:modify $APP_ID --artifactId $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --${{ steps.default.outputs.CLUSTER_MODE }} --property splunk.url:${{ vars.SPLUNK_URL }} \
+            echo " anypoint-cli-v4 runtime-mgr:application:modify $APP_ID --artifactId $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }}
+            --${{ steps.default.outputs.CLUSTER_MODE }} \
+            --${{ steps.default.outputs.ANYPOINT_FWD_SSL_SESSION }} \
+            --${{ steps.default.outputs.ANYPOINT_LAST_MILE_SECURITY }} \
             --secureProperty mule.key:${{ steps.aws_secrets.outputs.ANYPOINT_MULE_KEY }} \
             --secureProperty anypoint.platform.client_id:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_ID }} \
             --secureProperty anypoint.platform.client_secret:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_SECRET }} \
             --secureProperty splunk.token:${{ steps.aws_secrets.outputs.SPLUNK_TOKEN }} \
+            --property splunk.url:${{ steps.aws_secrets.outputs.SPLUNK_URL }} \
             --property splunk.source:$ENV_NAME-$APP_NAME \
             --property splunk.index:${{ steps.aws_secrets.outputs.SPLUNK_INDEX }} \
-            --property mule.env:${{ steps.aws_secrets.outputs.ANYPOINT_ENV }} \
+            --property mule.env:$ENV_NAME \
             --property env:$ENV_NAME"
 
             #Re-Deploy Command
-            anypoint-cli-v4 runtime-mgr:application:modify $APP_ID --artifactId $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --${{ steps.default.outputs.CLUSTER_MODE }} --property splunk.url:${{ vars.SPLUNK_URL }} \
+            anypoint-cli-v4 runtime-mgr:application:modify $APP_ID --artifactId $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} \
+            --${{ steps.default.outputs.CLUSTER_MODE }} \
+            --${{ steps.default.outputs.ANYPOINT_FWD_SSL_SESSION }} \
+            --${{ steps.default.outputs.ANYPOINT_LAST_MILE_SECURITY }} \
             --secureProperty mule.key:${{ steps.mapper.outputs.ANYPOINT_MULE_KEY }} \
             --secureProperty anypoint.platform.client_id:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_ID }} \
             --secureProperty anypoint.platform.client_secret:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_SECRET }} \
             --secureProperty splunk.token:${{ steps.aws_secrets.outputs.SPLUNK_TOKEN }} \
+            --property splunk.url:${{ steps.aws_secrets.outputs.SPLUNK_URL }} \
             --property splunk.source:$ENV_NAME-$APP_NAME \
             --property splunk.index:${{ steps.aws_secrets.outputs.SPLUNK_INDEX }} \
-            --property mule.env:${{ steps.aws_secrets.outputs.ANYPOINT_ENV }} \
+            --property mule.env:$ENV_NAME \
             --property env:$ENV_NAME
 
           else
             echo "Application '$APP_NAME' not found. Deploying a new application..."
 
             #ECHO DEPLOY COMMAND
-            echo " anypoint-cli-v4 runtime-mgr:application:deploy '$APP_NAME' ${{ steps.aws_secrets.outputs.DEPLOYMENT_TARGET }} ${{ vars.RUNTIME_VERSION }} '$APP_NAME' --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --${{ steps.default.outputs.CLUSTER_MODE }} --releaseChannel ${{ vars.RELEASE_CHANNEL }} --property splunk.url:${{ vars.SPLUNK_URL }} \
+            echo " anypoint-cli-v4 runtime-mgr:application:deploy '$APP_NAME' ${{ steps.aws_secrets.outputs.DEPLOYMENT_TARGET_CH2 }} ${{ vars.RUNTIME_VERSION }} '$APP_NAME' --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --releaseChannel ${{ vars.RELEASE_CHANNEL }} \
+            --${{ steps.default.outputs.CLUSTER_MODE }} \
+            --${{ steps.default.outputs.ANYPOINT_FWD_SSL_SESSION }} \
+            --${{ steps.default.outputs.ANYPOINT_LAST_MILE_SECURITY }} \
             --secureProperty mule.key:${{ steps.aws_secrets.outputs.ANYPOINT_MULE_KEY }} \
             --secureProperty anypoint.platform.client_id:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_ID }} \
             --secureProperty anypoint.platform.client_secret:${{ steps.aws_secrets.outputs.ANYPOINT_PLATFORM_CLIENT_SECRET }} \
             --secureProperty splunk.token:${{ steps.aws_secrets.outputs.SPLUNK_TOKEN }} \
+            --property splunk.url:${{ steps.aws_secrets.outputs.SPLUNK_URL }} \
             --property splunk.source:$ENV_NAME-$APP_NAME \
             --property splunk.index:${{ steps.aws_secrets.outputs.SPLUNK_INDEX }} \
-            --property mule.env:${{ steps.aws_secrets.outputs.ANYPOINT_ENV }} \
+            --property mule.env:$ENV_NAME \
             --property env:$ENV_NAME"
 
             #DEPLOY COMMAND
-            anypoint-cli-v4 runtime-mgr:application:deploy $APP_NAME ${{ steps.aws_secrets.outputs.DEPLOYMENT_TARGET }} ${{ vars.RUNTIME_VERSION }} $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --releaseChannel ${{ vars.RELEASE_CHANNEL }} --${{ steps.default.outputs.CLUSTER_MODE }} --property splunk.url:${{ vars.SPLUNK_URL }} \
+            anypoint-cli-v4 runtime-mgr:application:deploy $APP_NAME ${{ steps.aws_secrets.outputs.DEPLOYMENT_TARGET_CH2 }} ${{ vars.RUNTIME_VERSION }} $APP_NAME --assetVersion $RELEASE_VERSION --groupId ${{ steps.version.outputs.BUSINESS_GROUP_ORG_ID }} --replicaSize ${{ steps.default.outputs.REPLICA_SIZE }} --replicas ${{ steps.default.outputs.REPLICA_COUNT }} --releaseChannel ${{ vars.RELEASE_CHANNEL }} 
+            --${{ steps.default.outputs.CLUSTER_MODE }} \
+            --${{ steps.default.outputs.ANYPOINT_FWD_SSL_SESSION }} \
+            --${{ steps.default.outputs.ANYPOINT_LAST_MILE_SECURITY }} \
             --secureProperty mule.key:${{ steps.aws_secrets.outputs.ANYPOINT_MULE_KEY }} \
             --secureProperty anypoint.platform.client_id:${{ steps.mapper.outputs.ANYPOINT_PLATFORM_CLIENT_ID }} \
             --secureProperty anypoint.platform.client_secret:${{ steps.mapper.outputs.ANYPOINT_PLATFORM_CLIENT_SECRET }} \
             --secureProperty splunk.token:${{ steps.aws_secrets.outputs.SPLUNK_TOKEN }} \
+            --property splunk.url:${{ steps.aws_secrets.outputs.SPLUNK_URL }} \
             --property splunk.source:$ENV_NAME-$APP_NAME \
             --property splunk.index:${{ steps.aws_secrets.outputs.SPLUNK_INDEX }} \
-            --property mule.env:${{ steps.mapper.outputs.ANYPOINT_ENV }} \
+            --property mule.env:$ENV_NAME \
             --property env:$ENV_NAME
           fi
         if: ${{ success() }}          
